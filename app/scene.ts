@@ -302,7 +302,8 @@ export function createBeach(host:HTMLDivElement, progress:{current:number}) {
  const placeholder=new THREE.DataTexture(new Uint8Array([110,130,150,255]),1,1);placeholder.needsUpdate=true;
  let disposed=false;
  const uniforms={uSunElevation:{value:sunElevation(progress.current)},uCloudPhoto:{value:placeholder as THREE.Texture},uPhotoReady:{value:0},uRidgeProfile:{value:ridgeTexture},uResolution:{value:new THREE.Vector2()},uTime:{value:0},uProgress:{value:progress.current},uPointer:{value:new THREE.Vector2()}};
- const cloudTexture=new THREE.TextureLoader().load('/textures/oropos-sky.jpg',texture=>{
+ const cloudTextureUrl=new URL('./textures/oropos-sky.jpg',window.location.href).pathname;
+ const cloudTexture=new THREE.TextureLoader().load(cloudTextureUrl,texture=>{
   if(disposed){texture.dispose();return;}
   texture.colorSpace=THREE.NoColorSpace;
   texture.minFilter=THREE.LinearMipmapLinearFilter;

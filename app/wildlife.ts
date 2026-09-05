@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { sunElevation } from './day-cycle';
 
 /** Small mullet-like fish, modelled in metres and lit in the beach's world space. */
 export function createWildlife() {
@@ -78,11 +79,11 @@ export function createWildlife() {
       fish.rotation.set(0, .10 * Math.sin(flight * 8), Math.atan2(4.4145 - 9.81 * flight, 2));
       tail.rotation.y = Math.sin(flight * 34) * .26 * Math.exp(-flight * 1.5);
     }
-    const night = THREE.MathUtils.smoothstep(progress, .72, .97);
+    const night = THREE.MathUtils.smoothstep(progress, .84, .99);
     const gold = THREE.MathUtils.smoothstep(progress, .14, .56) * (1 - THREE.MathUtils.smoothstep(progress, .74, .99));
     sunlight.color.copy(day).lerp(warm, gold).lerp(moon, night);
     sunlight.intensity = 2.1 * (1 - night) + .22 * night;
-    sunlight.position.set(.55, .42 - .56 * THREE.MathUtils.smoothstep(progress, 0, .86), -1).lerp(new THREE.Vector3(.58,.4,-1), night);
+    sunlight.position.set(THREE.MathUtils.lerp(.34,.63,THREE.MathUtils.smoothstep(progress,0,.8)), sunElevation(progress), -1).lerp(new THREE.Vector3(.58,.4,-1), night);
     ambient.intensity = 1.4 * (1 - night) + .16 * night;
     camera.position.set(pointer.x * .15, 3.4 + progress * .25, 14 - progress * .7);
     camera.aspect = aspect; camera.updateProjectionMatrix();

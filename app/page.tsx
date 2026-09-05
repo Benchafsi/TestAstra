@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, Waves, Volume2, VolumeX, Maximize, Minimize } from 'lucide-react';
 import { createBeach } from './scene';
+import { createQuietSurf } from './surf-audio';
 const chapters = [
  { name:'Morning', title:['A slower kind','of time.'], note:'The world wakes. The ocean breathes.', at:0 },
  { name:'Golden hour', title:['Stay for','the afterglow.'], note:'Everything the light touches turns to gold.', at:.58 },
@@ -9,11 +10,21 @@ const chapters = [
 ];
 export default function Home(){
  const host=useRef<HTMLDivElement>(null), progress=useRef(0), audio=useRef<AudioContext|null>(null);
+ const audioGain=useRef<GainNode|null>(null);
  const [p,setP]=useState(0),[sound,setSound]=useState(false),[immersive,setImmersive]=useState(false),[error,setError]=useState(false);
- const active=p<.35?0:p<.82?1:2;
+ const active=p<.35?0:p<.86?1:2;
  useEffect(()=>{const scroll=()=>{progress.current=Math.min(1,Math.max(0,window.scrollY/(document.documentElement.scrollHeight-innerHeight)));setP(progress.current)};window.addEventListener('scroll',scroll,{passive:true});scroll();let dispose:(()=>void)|undefined;try{dispose=createBeach(host.current!,progress)}catch{queueMicrotask(()=>setError(true))}return()=>{dispose?.();window.removeEventListener('scroll',scroll);void audio.current?.close()}},[]);
  const go=(at:number)=>window.scrollTo({top:at*(document.documentElement.scrollHeight-innerHeight),behavior:matchMedia('(prefers-reduced-motion: reduce)').matches?'instant':'smooth'});
- async function toggleSound(){if(!audio.current){const ctx=new AudioContext();audio.current=ctx;const buffer=ctx.createBuffer(1,ctx.sampleRate*8,ctx.sampleRate),data=buffer.getChannelData(0);let last=0;for(let i=0;i<data.length;i++){last=(last+.025*(Math.random()*2-1))/1.025;data[i]=last*5}const source=ctx.createBufferSource();source.buffer=buffer;source.loop=true;const filter=ctx.createBiquadFilter();filter.type='lowpass';filter.frequency.value=750;const gain=ctx.createGain();gain.gain.value=.32;const lfo=ctx.createOscillator();lfo.frequency.value=.12;const depth=ctx.createGain();depth.gain.value=.23;lfo.connect(depth).connect(gain.gain);source.connect(filter).connect(gain).connect(ctx.destination);source.start();lfo.start()}if(sound)await audio.current.suspend();else await audio.current.resume();setSound(!sound)}
+ async function toggleSound(){
+  if(!audio.current){const ctx=new AudioContext();audio.current=ctx;audioGain.current=createQuietSurf(ctx);}
+  const ctx=audio.current;
+  if(ctx.state==='suspended')await ctx.resume();
+  const gain=audioGain.current!.gain;
+  gain.cancelScheduledValues(ctx.currentTime);
+  gain.setTargetAtTime(sound?0:.11,ctx.currentTime,.45);
+  setSound(!sound);
+ }
+
  const minutes=Math.round(420+p*900);
  return <main className={immersive?'experience immersive':'experience'}>
  <div className="scene" ref={host} aria-hidden="true"/><div className="vignette"/>

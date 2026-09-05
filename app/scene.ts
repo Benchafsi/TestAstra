@@ -1,12 +1,14 @@
 import * as THREE from 'three';
 import Lenis from 'lenis';
 import { createWildlife } from './wildlife';
+import { sunElevation } from './day-cycle';
 
 const fragmentShader = `
 precision highp float;
 uniform vec2 uResolution;
 uniform float uTime;
 uniform float uProgress;
+uniform float uSunElevation;
 uniform vec2 uPointer;
 uniform sampler2D uCloudPhoto;
 uniform float uPhotoReady;
@@ -16,6 +18,8 @@ float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
 float fbm(vec2 p){float f=0.;float a=.5;for(int i=0;i<5;i++){f+=a*noise(p);p=mat2(1.6,1.2,-1.2,1.6)*p;a*=.5;}return f;}
 float night;float gold;vec3 sunDir;vec3 moonDir;
+float sunsetWarmth(){return (1.-smoothstep(.015,.23,sunDir.y))*(1.-night);}
+vec3 sunlightColor(){return mix(vec3(1.,.96,.84),vec3(1.,.43,.14),sunsetWarmth());}
 // The supplied Oropos photo provides real cloud contours and internal detail.
 // Only its sky is sampled: the lower 56% (land and sea) never enters this layer.
 vec4 clouds(vec3 rd){
@@ -25,17 +29,43 @@ vec4 clouds(vec3 rd){
  // Reverse the panorama so its warm light agrees with our sun on the right.
  float u=clamp(.5-azimuth/1.27+sin(uTime*.009)*.009,.012,.988);
  float v=mix(.56,.995,clamp(elevation/.365,0.,1.));
- vec3 photo=texture2D(uCloudPhoto,vec2(u,v)).rgb;
+ // Small, soft reconstruction footprint reduces JPEG block edges in the source.
+ vec2 uv=vec2(u,v),texel=vec2(1./2048.,1./1537.);
+ vec2 radius=max(texel*2.5,fwidth(uv)*.7);
+ vec3 photo=texture2D(uCloudPhoto,uv).rgb*.28;
+ photo+=texture2D(uCloudPhoto,uv+vec2(radius.x,0.)).rgb*.12;
+ photo+=texture2D(uCloudPhoto,uv-vec2(radius.x,0.)).rgb*.12;
+ photo+=texture2D(uCloudPhoto,uv+vec2(0.,radius.y)).rgb*.12;
+ photo+=texture2D(uCloudPhoto,uv-vec2(0.,radius.y)).rgb*.12;
+ photo+=texture2D(uCloudPhoto,uv+radius).rgb*.06;
+ photo+=texture2D(uCloudPhoto,uv-radius).rgb*.06;
+ photo+=texture2D(uCloudPhoto,uv+vec2(radius.x,-radius.y)).rgb*.06;
+ photo+=texture2D(uCloudPhoto,uv+vec2(-radius.x,radius.y)).rgb*.06;
  float luminance=dot(photo,vec3(.2126,.7152,.0722));
  float blue=photo.b-photo.r;
- float cloud=1.-smoothstep(.075,.235,blue);
- // Neutralize the photographed sunset for morning; bring its warmth back at dusk.
+ float cloud=1.-smoothstep(.05,.255,blue);
+ // Relight the real cloud detail from the current sun, not a fixed side tint.
  float value=clamp((luminance-.16)/.65,0.,1.);
+ float warmth=sunsetWarmth();
+ float sunAzimuth=atan(sunDir.x,-sunDir.z);
+ float separation=abs(azimuth-sunAzimuth);
+ float nearSun=exp(-separation*separation/ .32);
+ float lowBank=1.-smoothstep(.06,.40,elevation);
+ float illumination=nearSun*(.4+.6*lowBank);
  vec3 morning=mix(vec3(.29,.37,.44),vec3(.96,.97,.94),value);
- vec3 dusk=mix(vec3(.28,.32,.36),vec3(1.,.85,.59),value);
- float warmSide=smoothstep(-.5,.55,rd.x);
- dusk=mix(dusk,photo*vec3(1.07,1.01,.92),.55+warmSide*.2);
- vec3 lit=mix(morning,dusk,gold);
+ vec3 coolShadow=mix(vec3(.24,.29,.35),vec3(.51,.54,.57),value);
+ vec3 amber=mix(vec3(.49,.29,.18),vec3(1.,.77,.38),value);
+ vec3 dusk=mix(coolShadow,amber,clamp(illumination*.8+value*.20,0.,1.));
+ vec3 lit=mix(morning,dusk,warmth);
+ // Thin sunward edges transmit more light than the dense cloud interiors.
+ vec2 sunUV=vec2(.5-sunAzimuth/1.27,mix(.56,.995,clamp(asin(sunDir.y)/.365,0.,1.)));
+ vec2 towardSun=normalize(sunUV-uv+vec2(.00001));
+ vec3 neighbor=texture2D(uCloudPhoto,clamp(uv+towardSun*.006,vec2(.005),vec2(.995))).rgb;
+ float neighborCloud=1.-smoothstep(.05,.255,neighbor.b-neighbor.r);
+ float rim=smoothstep(.015,.22,max(cloud-neighborCloud,0.));
+ float transmission=pow(1.-cloud*.82,2.);
+ float afterglow=smoothstep(-.13,-.035,sunDir.y)*(1.-night);
+ lit+=sunlightColor()*(rim*.46+transmission*.15)*illumination*afterglow*(.35+warmth*.8);
  vec3 nocturnal=mix(vec3(.014,.025,.045),vec3(.10,.14,.21),value);
  lit=mix(lit,nocturnal,night);
  float alpha=cloud*.97;
@@ -46,14 +76,23 @@ vec4 clouds(vec3 rd){
 vec3 sky(vec3 rd){
  float h=max(rd.y,0.);
  vec3 zenith=mix(vec3(.20,.43,.60),vec3(.23,.37,.50),gold);
- vec3 horizon=mix(vec3(.83,.88,.83),vec3(.98,.73,.43),gold);
+ vec3 horizon=mix(vec3(.83,.88,.83),vec3(1.,.61,.30),sunsetWarmth());
  zenith=mix(zenith,vec3(.008,.019,.065),night);
  horizon=mix(horizon,vec3(.055,.105,.18),night);
  vec3 col=mix(horizon,zenith,pow(clamp(h,0.,1.),.42));
  float sd=max(dot(rd,sunDir),0.);
- col+=vec3(1.,.65,.30)*pow(sd,9.)*.24*(1.-night);
- col+=vec3(1.,.65,.31)*pow(sd,70.)*.42*(1.-night);
- col+=vec3(1.,.90,.65)*smoothstep(.99972,.99986,sd)*2.4*(1.-night);
+ float sunVisibility=smoothstep(-.045,.025,sunDir.y)*(1.-night);
+ vec3 tangent=normalize(cross(sunDir,vec3(0.,1.,0.)));
+ vec3 bitangent=cross(tangent,sunDir);
+ vec2 offset=vec2(dot(rd,tangent),dot(rd,bitangent));
+ float radius=length(offset),angle=atan(offset.y,offset.x);
+ float spokes=pow(.5+.5*sin(angle*9.+sin(angle*3.)*.8),10.);
+ spokes+=pow(.5+.5*sin(angle*15.+1.7),16.)*.35;
+ float shafts=spokes*exp(-radius*13.)*smoothstep(.012,.04,radius)*(1.-smoothstep(.25,.42,radius));
+ col+=sunlightColor()*shafts*(.20+gold*.16)*sunVisibility;
+ col+=sunlightColor()*pow(sd,9.)*.24*sunVisibility;
+ col+=sunlightColor()*pow(sd,70.)*.42*sunVisibility;
+ col+=mix(vec3(1.,.98,.88),vec3(1.,.56,.22),sunsetWarmth())*smoothstep(.99972,.99986,sd)*2.4*sunVisibility;
  float md=max(dot(rd,moonDir),0.);
  col+=vec3(.50,.64,.90)*pow(md,90.)*.20*night;
  col+=vec3(.88,.93,1.)*smoothstep(.99982,.99990,md)*night;
@@ -141,10 +180,10 @@ vec3 splash(vec3 color,vec3 ro,vec3 rd,float age,vec3 center){
 }
 void main(){
  vec2 uv=(vUv-.5)*vec2(uResolution.x/uResolution.y,1.);
- night=smoothstep(.72,.97,uProgress);
+ night=smoothstep(.84,.99,uProgress);
  gold=smoothstep(.14,.56,uProgress)*(1.-smoothstep(.74,.99,uProgress));
- float sunHeight=mix(.42,-.14,smoothstep(0.,.86,uProgress));
- sunDir=normalize(vec3(.55,sunHeight,-1.));moonDir=normalize(vec3(.58,.40,-1.));
+ float sunHeight=uSunElevation;
+ sunDir=normalize(vec3(mix(.34,.63,smoothstep(0.,.8,uProgress)),sunHeight,-1.));moonDir=normalize(vec3(.58,.40,-1.));
  vec3 ro=vec3(uPointer.x*.15,3.4+uProgress*.25,14.-uProgress*.7);
  vec3 rd=normalize(vec3(uv.x+uPointer.x*.006,uv.y-.04+uPointer.y*.004,-1.35));
  vec3 color=sky(rd);
@@ -192,7 +231,15 @@ void main(){
    vec3 lightDir=mix(sunDir,moonDir,night);
    vec3 halfDir=normalize(lightDir-rd);
    float spec=pow(max(dot(n,halfDir),0.),170.);
-   color+=mix(vec3(1.,.76,.41),vec3(.42,.60,.85),night)*spec*(1.4+gold*1.2);
+   float sunAbove=smoothstep(-.045,.025,sunDir.y);
+   color+=mix(sunlightColor()*sunAbove,vec3(.42,.60,.85),night)*spec*(1.4+gold*1.2);
+   // A broken, elongated glitter path uses the same moving sun as the sky rays.
+   vec3 reflectedRay=reflect(rd,n);
+   float horizontal=reflectedRay.x/max(.1,-reflectedRay.z)-sunDir.x/max(.1,-sunDir.z);
+   float vertical=reflectedRay.y-sunDir.y;
+   float glitter=exp(-horizontal*horizontal/ .0016-vertical*vertical/.035);
+   float fragments=smoothstep(.48,.82,noise(pos.xz*vec2(8.,19.)+vec2(0.,uTime*.35)));
+   color+=sunlightColor()*glitter*fragments*.27*sunAbove*(1.-night);
    float phase=pos.z*.67-uTime*.68+sin(pos.x*.20)*.65;
    float crest=pow(.5+.5*sin(phase),18.);
    float breaker=crest*smoothstep(-13.,-1.,shoreD)*(1.-smoothstep(-.8,1.1,shoreD));
@@ -254,7 +301,7 @@ export function createBeach(host:HTMLDivElement, progress:{current:number}) {
  ridgeTexture.minFilter=THREE.LinearFilter;ridgeTexture.magFilter=THREE.LinearFilter;ridgeTexture.needsUpdate=true;
  const placeholder=new THREE.DataTexture(new Uint8Array([110,130,150,255]),1,1);placeholder.needsUpdate=true;
  let disposed=false;
- const uniforms={uCloudPhoto:{value:placeholder as THREE.Texture},uPhotoReady:{value:0},uRidgeProfile:{value:ridgeTexture},uResolution:{value:new THREE.Vector2()},uTime:{value:0},uProgress:{value:progress.current},uPointer:{value:new THREE.Vector2()}};
+ const uniforms={uSunElevation:{value:sunElevation(progress.current)},uCloudPhoto:{value:placeholder as THREE.Texture},uPhotoReady:{value:0},uRidgeProfile:{value:ridgeTexture},uResolution:{value:new THREE.Vector2()},uTime:{value:0},uProgress:{value:progress.current},uPointer:{value:new THREE.Vector2()}};
  const cloudTexture=new THREE.TextureLoader().load('/textures/oropos-sky.jpg',texture=>{
   if(disposed){texture.dispose();return;}
   texture.colorSpace=THREE.NoColorSpace;
@@ -270,7 +317,7 @@ export function createBeach(host:HTMLDivElement, progress:{current:number}) {
  const pointer=(e:PointerEvent)=>{if(!reduced)uniforms.uPointer.value.set((e.clientX/innerWidth-.5)*2,(.5-e.clientY/innerHeight)*2)};
  resize();window.addEventListener('resize',resize);window.addEventListener('pointermove',pointer,{passive:true});
  let frame=0,last=0,elapsed=0;
- const animate=(now:number)=>{frame=requestAnimationFrame(animate);lenis?.raf(now);if(document.hidden){last=now;return}const dt=Math.min((now-last)/1000,.05);last=now;elapsed+=dt;uniforms.uTime.value=reduced?0:elapsed;uniforms.uProgress.value=THREE.MathUtils.lerp(uniforms.uProgress.value,progress.current,reduced?1:1-Math.exp(-dt*5));renderer.clear();renderer.render(scene,camera);wildlife.update(uniforms.uTime.value,uniforms.uProgress.value,uniforms.uPointer.value,innerWidth/innerHeight);renderer.clearDepth();renderer.render(wildlife.scene,wildlife.camera)};
+ const animate=(now:number)=>{frame=requestAnimationFrame(animate);lenis?.raf(now);if(document.hidden){last=now;return}const dt=Math.min((now-last)/1000,.05);last=now;elapsed+=dt;uniforms.uTime.value=reduced?0:elapsed;uniforms.uProgress.value=THREE.MathUtils.lerp(uniforms.uProgress.value,progress.current,reduced?1:1-Math.exp(-dt*5));uniforms.uSunElevation.value=sunElevation(uniforms.uProgress.value);renderer.clear();renderer.render(scene,camera);wildlife.update(uniforms.uTime.value,uniforms.uProgress.value,uniforms.uPointer.value,innerWidth/innerHeight);renderer.clearDepth();renderer.render(wildlife.scene,wildlife.camera)};
  frame=requestAnimationFrame(animate);
  return()=>{disposed=true;cloudTexture.dispose();placeholder.dispose();ridgeTexture.dispose();cancelAnimationFrame(frame);lenis?.destroy();window.removeEventListener('resize',resize);window.removeEventListener('pointermove',pointer);geometry.dispose();material.dispose();wildlife.dispose();renderer.dispose();renderer.domElement.remove()};
 }

@@ -1,6 +1,6 @@
 "use client";
+import { ArrowDown, ArrowUp, Maximize, Minimize, Volume2, VolumeX, Waves } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { ArrowDown, ArrowUp, Waves, Volume2, VolumeX, Maximize, Minimize } from 'lucide-react';
 import { createBeach } from './scene';
 import { createQuietSurf } from './surf-audio';
 const chapters = [
@@ -8,6 +8,7 @@ const chapters = [
  { name:'Golden hour', title:['Stay for','the afterglow.'], note:'Everything the light touches turns to gold.', at:.58 },
  { name:'Nightfall', title:['Under the','same stars.'], note:'A thousand lights. A little more stillness.', at:1 }
 ];
+
 export default function Home(){
  const host=useRef<HTMLDivElement>(null), progress=useRef(0), audio=useRef<AudioContext|null>(null);
  const audioGain=useRef<GainNode|null>(null);
